@@ -153,7 +153,10 @@
 
   const TEMPLATE = `
 <style>
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+  -moz-user-select: none;
+}
 
 #container {
   display: block;
@@ -173,65 +176,46 @@ canvas {
 .mark {
   display: block;
   position: absolute;
-  border: solid white 4px;
+  border: solid white 2px;
   border-radius: 50%;
   width: 40px;
   height: 40px;
-  margin-left: -20px;
-  margin-top: -20px;
-}
-
-.mark:before {
-  box-sizing: border-box;
-  display: block;
-  position: relative;
-  border: solid black 1px;
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
-  content: '';
-  margin-left: -4px;
-  margin-top: -4px;
+  transform: translate(-50%, -50%);
 }
 
 #popup {
   display: none;
   position: absolute;
-  width: 75px;
-  height: 75px;
-  border: solid white 6px;
+  width: 65px;
+  height: 65px;
+  border: solid white 3px;
   border-radius: 50%;
-  border-bottom-right-radius: 5px;
-  transform: translateY(-150%) translateX(-50%) rotate(45deg);
-  box-shadow: 6px 2px 4px black;
+  border-bottom-right-radius: 3px;
+  transform: translate(-50%, -150%) rotate(45deg);
+  box-shadow: 2px 2px 5px rgba(0, 0, 0, .6);
+  background-color: white;
 }
 
-#popup:before {
-  box-sizing: border-box;
-  display: block;
-  border: solid black 1px;
+.preview {
+  width: 100%;
+  height: 100%;
   border-radius: 50%;
-  border-bottom-right-radius: 5px;
-  width: 75px;
-  height: 75px;
-  margin-left: -6px;
-  margin-top: -6px;
-  content: '';
+  border: solid #ccc 1px;
 }
 
 </style>
 <div id="container">
   <canvas id="hues"></canvas>
   <canvas id="values"></canvas>
-  <div class="mark" id="huemark"></div>
-  <div class="mark" id="valuemark"></div>
-  <div id="popup"></div>
+  <div class="mark" id="huemark"><div class="preview"></div></div>
+  <div class="mark" id="valuemark"><div class="preview"></div></div>
+  <div id="popup"><div class="preview" id="swatch"></div></div>
 </div>
 `;
 
   const R0 = 0.10;  // The inner radius of the hue/saturation ring
   const R1 = 0.70;  // The outer radius of the hue/saturation ring
-  const R2 = 0.97;  // The outer radius of the value ring
+  const R2 = 0.98;  // The outer radius of the value ring
   const DEGREES = 180/Math.PI;  // Convert radians to degrees
   const RADIANS = Math.PI/180;  // Convert degrees to radians
   const PI = Math.PI;
@@ -258,6 +242,7 @@ canvas {
     this.huemark = this.shadow.getElementById('huemark');
     this.valuemark = this.shadow.getElementById('valuemark');
     this.popup = this.shadow.getElementById('popup');
+    this.swatch = this.shadow.getElementById('swatch');
 
     // Start off pure white
     this.h = 0;
@@ -365,9 +350,16 @@ canvas {
     this.valcanvas.width = this.width;
     this.valcanvas.height = this.height;
 
-    // Get the canvas contexts
+    // Get the canvas contexts.
+    //
+    // The hue canvas is opaque so as an optimization we turn off alpha for it.
+    //
+    // XXX To workaround bug 1126055 we set willReadFrequently on the value
+    // context. This forces the canvas to be rendered in software instead
+    // of by the GPU and avoids a clipping bug on mobile devices.
+    //
     this.huectx = this.huecanvas.getContext('2d', {alpha: false});
-    this.valctx = this.valcanvas.getContext('2d');
+    this.valctx = this.valcanvas.getContext('2d', {willReadFrequently: true});
 
     // Do the pre-drawing
     this.drawHueSaturationPlane();
@@ -637,7 +629,7 @@ canvas {
     var endAngle = 3 * HALFPI;
     // The inner half of this line will be overwritten by the solid
     // transparent circle we draw, so we draw it twice as wide as we need
-    this.valctx.lineWidth = 3 * this.dpr;
+    this.valctx.lineWidth = 2 * this.dpr;
     this.valctx.lineCap = 'square';
 
     for(var level = 255; level >= 0; level--) {
@@ -663,7 +655,7 @@ canvas {
     this.valctx.beginPath();
     this.valctx.arc(this.cx, this.cy, this.r2, 0, TWOPI);
     this.valctx.strokeStyle = '#000';
-    this.valctx.lineWidth = 2 * this.dpr;
+    this.valctx.lineWidth = 1 * this.dpr;
     this.valctx.stroke();
   };
 
@@ -730,24 +722,25 @@ canvas {
     this.popup.style.left = (x / this.dpr) + 'px';
     this.popup.style.top = (y / this.dpr) + 'px';
 
-    // Draw a transparent black circle in the value canvas to alter the
+    // Draw a thin ring between the hues and the values, using a color
+    // that is distinct from the current value.
+    //
+    // Then, draw a transparent black circle in the value canvas to alter the
     // apparent values of the colors in the hue canvas. We need to do a
     // copy operation so that the colors already in the canvas do not get
     // combined with the pixels we're drawing.
     //
-    // XXX This code works correctly on the desktop but not in Firefox for
-    // Android or on FirefoxOS, so until bug 1126055 is resolved, we're
-    // just not going to alter the value of the central color disk.
-    //
-    // var opacity = 1 - this.v;
-    // this.valctx.save();
-    // this.valctx.beginPath();
-    // this.valctx.arc(this.cx, this.cy, this.r1, 0, TWOPI, false);
-    // this.valctx.clip();
-    // this.valctx.globalCompositeOperation = 'copy';
-    // this.valctx.fillStyle = 'rgba(0,0,0,' + opacity + ')';
-    // this.valctx.fill();
-    // this.valctx.restore();
+    // XXX This is the drawing code that requires the 'willReadFrequently'
+    // workaround in the getContext() call above.
+    var opacity = 1 - this.v;
+    this.valctx.save();
+    this.valctx.beginPath();
+    this.valctx.arc(this.cx, this.cy, this.r1, 0, TWOPI, false);
+    this.valctx.clip();
+    this.valctx.globalCompositeOperation = 'copy';
+    this.valctx.fillStyle = 'rgba(0,0,0,' + opacity + ')';
+    this.valctx.fill();
+    this.valctx.restore();
   };
 
   ColorPickerImpl.prototype.updateHue = function() {
@@ -779,7 +772,7 @@ canvas {
   ColorPickerImpl.prototype.setMarkColor = function() {
     this.huemark.style.backgroundColor = this.hexColorString;
     this.valuemark.style.backgroundColor = this.hexColorString;
-    this.popup.style.backgroundColor = this.hexColorString;
+    this.swatch.style.backgroundColor = this.hexColorString;
   };
 
   ColorPickerImpl.prototype.showPopup = function(x, y) {
